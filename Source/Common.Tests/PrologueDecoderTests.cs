@@ -44,3 +44,59 @@ public class Amd64PrologueDecoderTests
         Assert.Equal(PrologueKind.Unknown, r.Kind);
     }
 }
+
+public class Arm64PrologueDecoderTests
+{
+    private static readonly IPrologueDecoder Decoder = new Arm64PrologueDecoder();
+
+    private static byte[] Word(uint w) => new[]
+    {
+        (byte)(w & 0xFF),
+        (byte)((w >> 8) & 0xFF),
+        (byte)((w >> 16) & 0xFF),
+        (byte)((w >> 24) & 0xFF),
+    };
+
+    [Fact]
+    public void Sub_sp_immediate_returns_frame_size()
+    {
+        // sub sp, sp, #0x40  →  imm12 = 0x40
+        uint w = 0xD10003FF | (0x40u << 10);
+        var r = Decoder.Decode(Word(w));
+        Assert.Equal(PrologueKind.FrameAlloc, r.Kind);
+        Assert.Equal(0x40, r.StackUsage);
+        Assert.Equal(4, r.BytesConsumed);
+    }
+
+    [Fact]
+    public void Sub_sp_immediate_zero_is_still_frame_alloc()
+    {
+        var r = Decoder.Decode(Word(0xD10003FF));
+        Assert.Equal(PrologueKind.FrameAlloc, r.Kind);
+        Assert.Equal(0, r.StackUsage);
+    }
+
+    [Fact]
+    public void Stp_x29_x30_pre_index_is_frame_pointer_based()
+    {
+        // stp x29, x30, [sp, #-16]!  →  imm7 = -2 (в единицах по 8 байт)
+        uint imm7 = 0x7Eu; // -2 в семи битах
+        uint w = 0xA9807BFD | (imm7 << 15);
+        var r = Decoder.Decode(Word(w));
+        Assert.Equal(PrologueKind.FramePointerBased, r.Kind);
+    }
+
+    [Fact]
+    public void Unrecognised_word_is_unknown()
+    {
+        var r = Decoder.Decode(Word(0x00000000));
+        Assert.Equal(PrologueKind.Unknown, r.Kind);
+    }
+
+    [Fact]
+    public void Truncated_input_is_unknown_not_crash()
+    {
+        var r = Decoder.Decode(new byte[] { 0xFF, 0x03 });
+        Assert.Equal(PrologueKind.Unknown, r.Kind);
+    }
+}

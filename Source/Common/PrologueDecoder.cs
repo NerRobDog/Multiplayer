@@ -65,4 +65,37 @@ namespace MultiplayerCommon.Tracing
             return PrologueResult.Unknown;
         }
     }
+
+    /// <summary>
+    /// Декодер под ARM64. Инструкции фиксированной длины по 4 байта, little-endian.
+    /// </summary>
+    public sealed class Arm64PrologueDecoder : IPrologueDecoder
+    {
+        // sub sp, sp, #imm12   (64-битная форма SUB immediate, Rn = Rd = sp)
+        private const uint SubSpMask  = 0xFF8003FFu;
+        private const uint SubSpValue = 0xD10003FFu;
+
+        // stp x29, x30, [sp, #imm]!   (пре-индексная запись пары)
+        private const uint StpFpLrMask  = 0xFFC07FFFu;
+        private const uint StpFpLrValue = 0xA9807BFDu;
+
+        public PrologueResult Decode(ReadOnlySpan<byte> code)
+        {
+            if (code.Length < 4)
+                return PrologueResult.Unknown;
+
+            uint word = (uint)(code[0] | (code[1] << 8) | (code[2] << 16) | (code[3] << 24));
+
+            if ((word & SubSpMask) == SubSpValue)
+            {
+                long usage = (word >> 10) & 0xFFF;
+                return new PrologueResult(PrologueKind.FrameAlloc, usage, 4);
+            }
+
+            if ((word & StpFpLrMask) == StpFpLrValue)
+                return new PrologueResult(PrologueKind.FramePointerBased, 0, 4);
+
+            return PrologueResult.Unknown;
+        }
+    }
 }
