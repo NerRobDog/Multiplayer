@@ -100,3 +100,18 @@ public class Arm64PrologueDecoderTests
         Assert.Equal(PrologueKind.Unknown, r.Kind);
     }
 }
+
+public class PrologueDecoderSelectionTests
+{
+    [Fact]
+    public void Selects_a_decoder_matching_process_architecture()
+    {
+        var decoder = PrologueDecoders.ForCurrentProcess();
+
+        if (System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture
+            == System.Runtime.InteropServices.Architecture.Arm64)
+            Assert.IsType<Arm64PrologueDecoder>(decoder);
+        else
+            Assert.IsType<Amd64PrologueDecoder>(decoder);
+    }
+}

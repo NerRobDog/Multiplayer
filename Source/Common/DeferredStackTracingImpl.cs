@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using HarmonyLib;
 using Multiplayer.Common;
+using MultiplayerCommon.Tracing;
 
 namespace Multiplayer.Client.Desyncs;
 
@@ -204,6 +205,9 @@ public static class DeferredStackTracingImpl
             StableStringHash(normalizedMethodNameBetweenOS);
     }
 
+    private static readonly IPrologueDecoder prologueDecoder =
+        PrologueDecoders.ForCurrentProcess();
+
     private static unsafe long GetStackUsage(long addr)
     {
         var ji = Native.mono_jit_info_table_find(Native.DomainPtr, (IntPtr)addr);
@@ -211,36 +215,26 @@ public static class DeferredStackTracingImpl
         if (ji == IntPtr.Zero)
             return NotJit;
 
-        var start = (uint*)Native.mono_jit_info_get_code_start(ji);
-        long usage = 0;
+        var start = (byte*)Native.mono_jit_info_get_code_start(ji);
+        var result = prologueDecoder.Decode(new ReadOnlySpan<byte>(start, 16));
 
-        // Emitted at: https://github.com/Unity-Technologies/mono/blob/2022.3.35f1/mono/mini/mini-amd64.c#L7652
-        // - diverges into: https://github.com/Unity-Technologies/mono/blob/2022.3.35f1/mono/arch/amd64/amd64-codegen.h#L190-L193
-        if ((*start & 0xFFFFFF) == 0xEC8348) // sub rsp,XX (4883EC XX)
+        switch (result.Kind)
         {
-            usage = *start >> 24;
-            start += 1;
-        }
-        // - diverges into: https://github.com/Unity-Technologies/mono/blob/2022.3.35f1/mono/arch/amd64/amd64-codegen.h#L199-L202
-        //   basically just a long form of the above branch.
-        else if ((*start & 0xFFFFFF) == 0xEC8148) // sub rsp,XXXXXXXX (4881EC XXXXXXXX)
-        {
-            usage = *(uint*)((long)start + 3);
-            start = (uint*)((long)start + 7);
-        }
+            case PrologueKind.FrameAlloc:
+                long usage = result.StackUsage;
+                if (usage != 0 && prologueDecoder is Amd64PrologueDecoder)
+                    CheckRbpUsage((uint*)(start + result.BytesConsumed), ref usage);
+                return usage;
 
-        if (usage != 0)
-        {
-            CheckRbpUsage(start, ref usage);
-            return usage;
+            case PrologueKind.FramePointerBased:
+                return RbpBased;
+
+            default:
+                // Раньше здесь бросалось исключение, из-за чего на ARM64 рвался
+                // тик каждой пешки. Неизвестный пролог — это отсутствие данных,
+                // а не сбой: возвращаем NotJit и продолжаем.
+                return NotJit;
         }
-
-        // https://github.com/Unity-Technologies/mono/blob/2022.3.35f1/mono/mini/mini-amd64.c#L7559
-        // push rbp (55)
-        if (*(byte*)start == 0x55)
-            return RbpBased;
-
-        throw new Exception($"Deferred stack tracing: Unknown function header {*start} {Native.MethodNameFromAddr(addr, false)}");
     }
 
     private static unsafe void CheckRbpUsage(uint* at, ref long stackUsage)

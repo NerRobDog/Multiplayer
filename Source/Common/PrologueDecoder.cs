@@ -98,4 +98,15 @@ namespace MultiplayerCommon.Tracing
             return PrologueResult.Unknown;
         }
     }
+
+    public static class PrologueDecoders
+    {
+        private static readonly IPrologueDecoder Current =
+            System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture
+                == System.Runtime.InteropServices.Architecture.Arm64
+                ? new Arm64PrologueDecoder()
+                : (IPrologueDecoder)new Amd64PrologueDecoder();
+
+        public static IPrologueDecoder ForCurrentProcess() => Current;
+    }
 }
