@@ -84,7 +84,15 @@ namespace Multiplayer.Client
 
                 try
                 {
-                    if (!TickPatch.Simulating && (Multiplayer.LocalServer != null || Multiplayer.arbiterInstance))
+                    // Отправляют все, а выбирает сервер: на автономном сервере
+                    // ни у кого нет локального сервера и никто не арбитр,
+                    // поэтому прежнее условие не пропускало ни одного мнения,
+                    // и десинки не обнаруживались вовсе.
+                    //
+                    // Политика выбора опорного мнения живёт на сервере
+                    // (DesyncReference), и держать её половину здесь значило бы
+                    // расщепить одно решение на два места.
+                    if (!TickPatch.Simulating)
                         Multiplayer.Client.SendFragmented(
                             new ClientSyncInfoPacket { SyncOpinion = opinion.ToNet() }.Serialize());
                 }
