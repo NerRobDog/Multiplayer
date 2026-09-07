@@ -32,14 +32,16 @@ if (!savePresent)
     ServerLog.Log("Waiting for a client to upload world data.");
 }
 
+var startup = ServerStartupPlan.Decide(settingsPresent, savePresent);
+
 var server = MultiplayerServer.instance = new MultiplayerServer(settings)
 {
     running = true,
     IsStandaloneServer = true,
-    BootstrapMode = settingsPresent && savePresent,
+    BootstrapMode = startup == ServerStartupAction.Bootstrap,
 };
 
-if (!server.BootstrapMode)
+if (startup == ServerStartupAction.LoadSave)
 {
     LoadSave(server, saveFile);
 }
