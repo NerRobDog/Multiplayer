@@ -1,4 +1,4 @@
-using MultiplayerCommon.Tracing;
+using Multiplayer.Common;
 using Xunit;
 
 public class Amd64PrologueDecoderTests

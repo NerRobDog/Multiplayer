@@ -1,6 +1,6 @@
 using System;
 
-namespace MultiplayerCommon.Tracing
+namespace Multiplayer.Common
 {
     public enum PrologueKind
     {
