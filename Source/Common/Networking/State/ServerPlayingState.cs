@@ -141,15 +141,35 @@ namespace Multiplayer.Common
         [TypedPacketHandler]
         public void HandleDesyncCheck(ClientSyncInfoPacket packet)
         {
-            var arbiter = Server.ArbiterPlaying;
-            if (arbiter ? !Player.IsArbiter : !Player.IsHost) return; // policy
+            // Опорное мнение выбирается по правилу из DesyncReference: на
+            // автономном сервере нет ни арбитра, ни игрока-хоста, и прежнее
+            // условие отбрасывало каждое мнение — десинки не обнаруживались
+            // вовсе.
+            var firstPlaying = Server.PlayingPlayers
+                .Where(p => !p.IsArbiter)
+                .OrderBy(p => p.id)
+                .FirstOrDefault();
+
+            var serverState = new DesyncReference.ServerState(
+                ArbiterPlaying: Server.ArbiterPlaying,
+                HostPresent: Server.PlayingPlayers.Any(p => p.IsHost));
+
+            var reference = new DesyncReference.Player(
+                IsArbiter: Player.IsArbiter,
+                IsHost: Player.IsHost,
+                IsFirstPlaying: firstPlaying != null && firstPlaying.id == Player.id);
+
+            if (!DesyncReference.IsReference(serverState, reference)) return;
 
             // Keep at most 10 sync infos
             Server.worldData.syncInfos.Add(packet.rawSyncOpinion);
             if (Server.worldData.syncInfos.Count > 10)
                 Server.worldData.syncInfos.RemoveAt(0);
 
-            foreach (var p in Server.PlayingPlayers.Where(p => !p.IsArbiter && (arbiter || !p.IsHost)))
+            // Рассылаем всем, кроме арбитра и самого автора: сравнивать
+            // мнение с собственным незачем. Раньше автор исключался по
+            // признаку хоста, что верно лишь пока опорным был хост.
+            foreach (var p in Server.PlayingPlayers.Where(p => !p.IsArbiter && p.id != Player.id))
                 p.conn.SendFragmented(new ServerSyncInfoPacket { rawSyncOpinion = packet.rawSyncOpinion }.Serialize());
         }
 

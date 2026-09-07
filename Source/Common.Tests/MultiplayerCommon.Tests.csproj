@@ -8,6 +8,7 @@
   <ItemGroup>
     <Compile Include="*.cs" />
     <Compile Include="..\Common\ServerStartupPlan.cs" Link="ServerStartupPlan.cs" />
+    <Compile Include="..\Common\DesyncReference.cs" Link="DesyncReference.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
