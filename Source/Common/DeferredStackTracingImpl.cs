@@ -111,8 +111,72 @@ public static class DeferredStackTracingImpl
 
     public static AddrTable hashTable = new();
 
+    private static readonly bool isArm64 =
+        System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture
+        == System.Runtime.InteropServices.Architecture.Arm64;
+
+    private sealed class NativeMemoryReader : IMemoryReader
+    {
+        public unsafe long ReadLong(long address) => *(long*)address;
+    }
+
+    private static readonly IMemoryReader memoryReader = new NativeMemoryReader();
+
+    // Предохранитель от бесконечного обхода на испорченной цепочке
+    private const int MaxArm64Frames = 4096;
+
+    /// <summary>
+    /// ARM64: обход по цепочке указателей кадра (x29). Размер кадра и LMF не нужны,
+    /// нативные кадры проходятся той же цепочкой и просто не попадают в трассу.
+    /// Семантика та же, что у amd64: первым идёт адрес возврата из TraceImpl.
+    /// </summary>
+    private static unsafe int TraceArm64(long[] traceIn, ref int hash, int skipFrames)
+    {
+        if (!arm64Ready)
+            return 0;
+
+        long fp = GetFpArm64(); // запись кадра TraceImpl
+
+        int depth = 0; // frames seen
+        int index = 0; // frames returned through long[] traceIn
+        for (int guard = 0; guard < MaxArm64Frames; guard++)
+        {
+            if (!Arm64FrameChain.TryStep(memoryReader, fp, out var ret, out var nextFp))
+                break;
+
+            ref var info = ref hashTable.GetOrCreateAddrInfo(ret);
+            if (info.addr == 0) UpdateNewElement(ref info, ret);
+
+            if (info.stackUsage != NotJit)
+            {
+                if (depth >= skipFrames && index < traceIn.Length)
+                {
+                    traceIn[index] = ret;
+
+                    // info.nameHash == 0 marks methods to skip
+                    if (index < HashInfluence && info.nameHash != 0) hash = HashCombineInt(hash, (int)info.nameHash);
+
+                    index++;
+                }
+
+                if (info.nameHash != 0 && ++depth == traceIn.Length)
+                    break;
+            }
+
+            if (nextFp == 0)
+                break;
+
+            fp = nextFp;
+        }
+
+        return index;
+    }
+
     public static unsafe int TraceImpl(long[] traceIn, ref int hash, int skipFrames = 0)
     {
+        if (isArm64)
+            return TraceArm64(traceIn, ref hash, skipFrames);
+
         if (Native.LmfPtr == 0)
             return 0;
 
@@ -214,6 +278,10 @@ public static class DeferredStackTracingImpl
         if (ji == IntPtr.Zero)
             return NotJit;
 
+        // ARM64: Mono всегда строит кадр с x29, размер кадра для обхода не нужен
+        if (isArm64)
+            return RbpBased;
+
         var start = (byte*)Native.mono_jit_info_get_code_start(ji);
         var result = prologueDecoder.Decode(new ReadOnlySpan<byte>(start, 16));
 
@@ -257,8 +325,57 @@ public static class DeferredStackTracingImpl
         }
     }
 
+    private static bool arm64Ready;
+    private static int arm64OffsetFromFp;
+
+    private static unsafe void InitArm64()
+    {
+        var method = AccessTools.DeclaredMethod(typeof(DeferredStackTracingImpl), nameof(GetFpArm64))!;
+        var codeStart = Native.mono_compile_method(method.MethodHandle.Value);
+        var jitInfo = Native.mono_jit_info_table_find(Native.DomainPtr, codeStart + 1);
+        if (jitInfo == IntPtr.Zero)
+        {
+            ServerLog.Error("ARM64 stack tracing disabled: no jit info for GetFpArm64");
+            return;
+        }
+
+        var instStart = (byte*)Native.mono_jit_info_get_code_start(jitInfo);
+        var instLen = Native.mono_jit_info_get_code_size(jitInfo);
+
+        if (!Arm64CodeScanner.TryFindMagicStore(new ReadOnlySpan<byte>(instStart, instLen), MagicNumber,
+                out var baseReg, out var offset))
+        {
+            ServerLog.Error(
+                "ARM64 stack tracing disabled: couldn't find the magic store in GetFpArm64. " +
+                $"Asm dump for the method: \n{HexDump(instStart, instLen)}");
+            return;
+        }
+
+        // Тело метода идёт после "mov x29, sp", поэтому sp == fp и база sp допустима
+        arm64OffsetFromFp = offset;
+        arm64Ready = true;
+        ServerLog.Log($"ARM64 stack tracing ready: local at {(baseReg == 29 ? "fp" : "sp")}+{offset}");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.NoOptimization)]
+    private static unsafe long GetFpArm64()
+    {
+        // Локаль лежит по [fp+offset], где offset найден разбором машинного кода метода.
+        // Запись кадра [fp] хранит fp вызывающего, то есть TraceImpl.
+        long register = MagicNumber;
+
+        long fp = (long)((byte*)&register - arm64OffsetFromFp);
+        return *(long*)fp;
+    }
+
     static DeferredStackTracingImpl()
     {
+        if (isArm64)
+        {
+            InitArm64();
+            return;
+        }
+
         // All of this code assumes that the rbp pointer offset stays the same throughout the method invocations.
         // Mono is generally allowed to recompile code, which could cause issues for us, but GetRpb is annotated as
         // NoInline and NoOptimization to heavily discourage any changes and avoid breaking.
