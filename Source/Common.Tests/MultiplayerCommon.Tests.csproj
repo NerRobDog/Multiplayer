@@ -10,6 +10,7 @@
     <Compile Include="..\Common\ServerStartupPlan.cs" Link="ServerStartupPlan.cs" />
     <Compile Include="..\Common\DesyncReference.cs" Link="DesyncReference.cs" />
     <Compile Include="..\Common\PrologueDecoder.cs" Link="PrologueDecoder.cs" />
+    <Compile Include="..\Common\Arm64FrameChain.cs" Link="Arm64FrameChain.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
